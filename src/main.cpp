@@ -50,14 +50,16 @@ int32_t get_sound_data(Frame *frames, int32_t frameCount)
 void setup(void)
 {
   Serial.begin(115200);
+  // Configure ADC for audio input
+  auto config = adc.defaultConfig(RX_MODE);
+  config.adc_pin = 34; // Specify the ADC pin (e.g., GPIO34)
+  adc.begin(config);
 
-  adc.begin(adc.defaultConfig(RX_MODE));
-
-  // start the bluetooth
-
-  a2dp_source.set_auto_reconnect(false);
-  a2dp_source.set_volume(127);
-  a2dp_source.start("LP5", get_sound_data);
+  // Start Bluetooth A2DP Source
+  a2dp_source.set_auto_reconnect(false);    // Enable auto-reconnect
+  a2dp_source.set_volume(127);              // Max volume
+  a2dp_source.start("LP5", get_sound_data); // Stream to LP5
+  Serial.println("Bluetooth A2DP streaming started.");
 }
 
 // Arduino loop - repeated processing
