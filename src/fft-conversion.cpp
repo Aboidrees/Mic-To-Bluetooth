@@ -1,11 +1,16 @@
 // #include "AudioTools.h"
 // #include "BluetoothA2DPSource.h"
+// #include "arduinoFFT.h"
+
+// #define SAMPLES 64               // Must be a power of 2
+// #define SAMPLING_FREQUENCY 16000 // Adjust based on microphone sample rate
 
 // AnalogAudioStream adc;
 // BluetoothA2DPSource a2dp_source;
-// const int BUFFER_SIZE = 64;
-// float previous_samples[BUFFER_SIZE] = {0};
-// int buffer_index = 0;
+// double real[SAMPLES];
+// double imag[SAMPLES];
+
+// ArduinoFFT<float> FFT = ArduinoFFT::ArduinoFFT<float>(real, imag, SAMPLES, SAMPLING_FREQUENCY); /* Create FFT object */
 
 // const int up = 18;
 // const int down = 19;
@@ -17,44 +22,62 @@
 
 // bool lock = false;
 
-// // Function to apply noise reduction to a single sample
-// int16_t apply_noise_reduction(int16_t sample)
+// // Noise Reduction Function
+// void apply_fft_noise_reduction(int16_t *audioSamples)
 // {
-//   float filtered_sample = (float)sample;
-//   for (int j = 0; j < BUFFER_SIZE; j++)
+//   // Step 1: Convert audio samples to double precision
+//   for (int i = 0; i < SAMPLES; i++)
 //   {
-//     filtered_sample += (float)previous_samples[j];
+//     real[i] = (double)audioSamples[i];
+//     imag[i] = 0.0;
 //   }
-//   filtered_sample /= (BUFFER_SIZE + 1);
 
-//   // Update buffer
-//   previous_samples[buffer_index] = sample;
-//   buffer_index = (buffer_index + 1) % BUFFER_SIZE;
+//   // Step 2: Perform FFT
+//   FFT.windowing(FFTWindow::Hamming, FFTDirection::Forward);
+//   FFT.compute(FFTDirection::Forward);
 
-//   return (int16_t)filtered_sample;
+//   // Step 3: Apply Noise Reduction
+//   for (int i = 1; i < (SAMPLES / 2); i++)
+//   {
+//     double magnitude = sqrt(real[i] * real[i] + imag[i] * imag[i]);
+
+//     // Set threshold (adjust this for better filtering)
+//     if (magnitude < 50)
+//     {
+//       real[i] = 0;
+//       imag[i] = 0;
+//     }
+//   }
+
+//   // Step 4: Perform Inverse FFT to reconstruct audio
+//   FFT.compute(FFTDirection::Reverse);
+//   FFT.complexToMagnitude();
+//   // Step 5: Convert back to 16-bit integer
+//   for (int i = 0; i < SAMPLES; i++)
+//   {
+//     audioSamples[i] = (int16_t)real[i];
+//   }
 // }
 
 // // callback used by A2DP to provide the sound data
 // int32_t get_sound_data(Frame *frames, int32_t frameCount)
 // {
 //   uint8_t *data = (uint8_t *)frames;
-//   int frameSize = 4;
-//   size_t resultBytes = adc.readBytes(data, frameCount * frameSize);
-
-//   // Apply noise reduction
-//   for (int i = 0; i < resultBytes; i += 2)
-//   { // Process 16-bit samples
-//     // Convert bytes to 16-bit sample
-//     int16_t sample = (data[i + 1] << 8) | data[i];
-
-//     // Apply noise reduction
-//     sample = apply_noise_reduction(sample);
-
-//     // Convert back to bytes
-//     data[i] = sample & 0xFF;
-//     data[i + 1] = (sample >> 8) & 0xFF;
+//   int16_t sampleBuffer[SAMPLES];
+//   for (int i = 0; i < SAMPLES; i += 2)
+//   {
+//     sampleBuffer[i] = (data[i + 1] << 8) | data[i];
 //   }
-//   return resultBytes / frameSize;
+
+//   // Apply FFT-based noise reduction
+//   apply_fft_noise_reduction(sampleBuffer);
+
+//   // Convert back to bytes
+//   for (int i = 0; i < SAMPLES; i += 2)
+//   {
+//     data[i] = sampleBuffer[i] & 0xFF;
+//     data[i + 1] = (sampleBuffer[i] >> 8) & 0xFF;
+//   }
 // }
 
 // void setup(void)

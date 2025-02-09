@@ -1,14 +1,17 @@
 #include "AudioTools.h"
 #include "BluetoothA2DPSource.h"
-#include "arduinoFFT.h"
 
-const uint16_t samples = 64; // This value MUST ALWAYS be a power of 2
-const float samplingFrequency = 16000;
 AnalogAudioStream adc;
 BluetoothA2DPSource a2dp_source;
-double real[samples];
-double imag[samples];
-ArduinoFFT<float> FFT = new ArduinoFFT<float>(real, imag, samples, samplingFrequency); /* Create FFT object */
+
+const int BUFFER_SIZE = 64;
+float previous_samples[BUFFER_SIZE] = {0};
+int buffer_index = 0;
+
+#define FILTER_LENGTH 32                    // Adaptive filter length
+float weights[FILTER_LENGTH] = {0};         // LMS filter coefficients
+float referenceSignal[FILTER_LENGTH] = {0}; // Noise reference buffer
+float learningRate = 0.01;                  // LMS learning rate
 
 const int up = 18;
 const int down = 19;
@@ -20,70 +23,70 @@ int volume = 120;
 
 bool lock = false;
 
-// Noise Reduction Function
-void apply_fft_noise_reduction(int16_t *samples)
+// Function to apply LMS adaptive noise cancellation
+int16_t apply_LMS_filter(int16_t sample, int16_t noiseReference)
 {
-  // Step 1: Convert audio samples to double precision
-  for (int i = 0; i < samples; i++)
-  {
-    real[i] = (double)samples[i];
+  float estimatedNoise = 0;
 
-    imag[i] = 0.0;
+  // Shift buffer for reference noise
+  for (int i = FILTER_LENGTH - 1; i > 0; i--)
+  {
+    referenceSignal[i] = referenceSignal[i - 1];
+  }
+  referenceSignal[0] = noiseReference;
+
+  // Compute estimated noise
+  for (int i = 0; i < FILTER_LENGTH; i++)
+  {
+    estimatedNoise += weights[i] * referenceSignal[i];
   }
 
-  // Step 2: Perform FFT
-  FFT.windowing(real, samples, FFT_WIN_HAMMING, FFT_FORWARD);
-  FFT.compute(real, imag, samples, FFT_FORWARD);
+  // Error Signal (Desired Signal - Estimated Noise)
+  float errorSignal = sample - estimatedNoise;
 
-  // Step 3: Apply Noise Reduction
-  for (int i = 1; i < (samples / 2); i++)
+  // Update LMS Weights
+  for (int i = 0; i < FILTER_LENGTH; i++)
   {
-    double magnitude = sqrt(real[i] * real[i] + imag[i] * imag[i]);
-
-    // Set threshold (adjust this for better filtering)
-    if (magnitude < 50)
-    {
-      real[i] = 0;
-      imag[i] = 0;
-    }
+    weights[i] += learningRate * errorSignal * referenceSignal[i];
   }
 
-  // Step 4: Perform Inverse FFT to reconstruct audio
-  FFT.compute(real, imag, samples, FFT_INVERSE);
-  FFT.complexToMagnitude(real, imag, samples);
-
-  // Step 5: Convert back to 16-bit integer
-  for (int i = 0; i < samples; i++)
-  {
-    samples[i] = (int16_t)real[i];
-  }
+  return (int16_t)errorSignal; // Return the cleaned audio signal
 }
 
-// callback used by A2DP to provide the sound data
+// A2DP callback function to get and process sound data
 int32_t get_sound_data(Frame *frames, int32_t frameCount)
 {
   uint8_t *data = (uint8_t *)frames;
-  int16_t sampleBuffer[samples];
-  for (int i = 0; i < samples; i += 2)
-  {
-    sampleBuffer[i] = (data[i + 1] << 8) | data[i];
+  int frameSize = 4; // Stereo 16-bit samples
+  size_t resultBytes = adc.readBytes(data, frameCount * frameSize);
+
+  // Apply LMS noise reduction
+  for (int i = 0; i < resultBytes; i += 2)
+  { // Process 16-bit samples
+    int16_t sample = (data[i + 1] << 8) | data[i];
+
+    // Simulated noise reference (if no second mic available, use a delayed signal)
+    int16_t noiseReference = previous_samples[buffer_index];
+
+    // Apply LMS Adaptive Filtering
+    sample = apply_LMS_filter(sample, noiseReference);
+
+    // Store sample in circular buffer
+    previous_samples[buffer_index] = sample;
+    buffer_index = (buffer_index + 1) % BUFFER_SIZE;
+
+    // Convert back to bytes
+    data[i] = sample & 0xFF;
+    data[i + 1] = (sample >> 8) & 0xFF;
   }
 
-  // Apply FFT-based noise reduction
-  apply_fft_noise_reduction(sampleBuffer);
-
-  // Convert back to bytes
-  for (int i = 0; i < samples; i += 2)
-  {
-    data[i] = sampleBuffer[i] & 0xFF;
-    data[i + 1] = (sampleBuffer[i] >> 8) & 0xFF;
-  }
+  return resultBytes / frameSize; // Return number of frames processed
 }
 
 void setup(void)
 {
-  // Serial.begin(115200);
-  // AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
+  Serial.begin(115200);
+  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
 
   // initialize the pushbutton pin as an input
   pinMode(up, INPUT);
@@ -95,9 +98,10 @@ void setup(void)
   adc.begin(config);
 
   // Start Bluetooth A2DP Source
-  a2dp_source.set_auto_reconnect(false);               // Enable auto-reconnect
-  a2dp_source.set_volume(127);                         // Max volume
-  a2dp_source.start("soundcore R50i", get_sound_data); // Stream to soundcore R50i
+  a2dp_source.set_auto_reconnect(false);        // Enable auto-reconnect
+  a2dp_source.set_volume(127);                  // Max volume
+  a2dp_source.start("KAKU-HY", get_sound_data); // Stream to soundcore R50i
+  // a2dp_source.start("soundcore R50i", get_sound_data); // Stream to soundcore R50i
   // a2dp_source.start("LP5", get_sound_data); // Stream to LP5
   delay(200);
 }
